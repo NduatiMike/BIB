@@ -1,0 +1,75 @@
+
+DECLARE
+    DATE_KEYS  VARCHAR2(12);
+    DUPS_COUNT NUMBER;
+    GEN VARCHAR2(2000);
+    V_PART VARCHAR2 (20);
+    V_SUBPART VARCHAR2 (20);
+    V_DATE VARCHAR2(12);
+     
+    BEGIN
+     
+ 
+    FOR  COUNTER  IN
+  
+     
+                              (
+                           SELECT DT, SUB FROM  IBF_DUPS_MK
+                           WHERE 1=1
+--                            AND COUNTER  > 2
+--                           AND COUNTER <=  3
+                            AND DT = 20170301
+                             AND SUB = 0
+                             )
+                                   
+                        LOOP
+                           
+                          V_DATE := COUNTER.DT ;
+                          V_SUBPART:= COUNTER.SUB;
+                          
+                            
+--                              
+                                      V_PART :=  '('||V_DATE ||','|| V_SUBPART ||')'  ;
+--                                      
+--                                     
+                                         GEN :=  '
+                                                 
+                                                       delete from STG_CDR.IBF_XDR
+                                                           where rowid in
+                                                          (
+                                                           select  rowid
+                                                          from
+                                                           (
+                                                  
+                                                  
+                                                    select   /*PARALLEL (20)*/  rowid, row_number() over (partition by A_MSISDN, SUBMIT_DATE_TIME, EDR_ID, UNIQUE_RECORD_ID,  WALLET , DW_SUBPART, DATE_KEY  ORDER BY  DATE_KEY DESC ) DUPS
+                                                    FROM STG_CDR.IBF_XDR SUBPARTITION FOR ' ||V_PART ||'
+                                                   
+                                                            ) 
+                                                      
+                                                      where dups > 1
+                                                      
+                                                      )
+                                                      
+                                                       '
+                                                      
+                                                        
+                                       ;
+                                              
+                                                     EXECUTE IMMEDIATE GEN;
+ 
+                                            COMMIT;  
+                                            
+--                                             dw_utl.log_app ('DELETE DUPS ', ' Done dw_SUBPART ' ||V_PART || 'I'  );
+--                               
+                              
+END LOOP;
+
+END ;
+/
+
+
+SELECT   '('|| DW_PARTS ||')'  FROM 
+   ( SELECT   DISTINCT MSISDN_NSK, SUBSTR (MSISDN_NSK, 10 )  DW_PARTS  FROM MK_BRT_OVERLAPS_8216591
+   WHERE  MSISDN_NSK = 27718931927 ) ;
+   

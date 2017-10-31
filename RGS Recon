@@ -1,0 +1,145 @@
+--select 
+--SUM(NVL(CLOSING_CNT,0) - NVL(OPENING_CNT,0)) as Net_Additions  
+--,SUM(NVL(RGS_1_CNT,0))        RGS1_COUNT   
+--,SUM(NVL(RGS_7_CNT,0))        RGS7_COUNT  
+--,SUM(NVL(RGS30_CNT,0))        RGS30_COUNT  
+--  
+----,SUM(MIGRATION_CNT)    MIGRATION_COUNT 
+--
+---- NUMBER FOR LIFE
+--,SUM(NVL(N4L_CNT,0))              AS MIGRATION_COUNT      
+--,SUM(NVL(N4L_HYBRID_IN_CNT,0))    AS MIGRATION_HYBRID_IN            
+--,SUM(NVL(N4L_HYBRID_OUT_CNT,0))   AS MIGRATION_HYBRID_OUT             
+--,SUM(NVL(N4L_POSTPAID_IN_CNT,0))  AS MIGRATION_POSTPAID_IN             
+--,SUM(NVL(N4L_POSTPAID_OUT_CNT,0)) AS MIGRATION_POSTPAID_OUT             
+--,SUM(NVL(N4L_PREPAID_IN_CNT,0))   AS MIGRATION_PREPAID_IN     
+--,SUM(NVL(N4L_PREPAID_OUT_CNT,0))  AS MIGRATION_PREPAID_OUT      
+
+
+
+select /* +PARALLEL 20*/
+SUM(NVL(CLOSING_CNT,0)) , SUM(NVL(OPENING_CNT,0)) , 
+--SUM(NVL(churner_cnt,0)) AS CHURN
+SUM(GROSS_ADDITIONS - churner_cnt ) as "Net_Add Balance"
+FROM BIB.FRU_SUBSCRIBER_SNAPD SUBS
+where date_key = '20170711';
+
+
+
+RGE_CALC
+
+SELECT /*+ PARALLEL(f,0 ) */  
+SUM(NVL(CLOSING_CNT,0) - NVL(OPENING_CNT,0)) as Net_Additions  
+      from  BIB_CDR.FCT_SUBS_RGE_CALC f
+      where date_key = 20170717
+--      and dw_subpart=1
+      ;
+
+
+
+SELECT SUM (OPENING_CNT) FROM
+(
+
+SELECT     CASE WHEN YESTERDAY_DT - YESTERDAY_DT  <=90 then 1 else 0 end OPENING_CNT
+FROM 
+(
+SELECT NVL(YESTERDAY_LAST_RGE_DT, to_date('19000101','YYYYMMDD')) YESTERDAY_RGE_DT, YESTERDAY_DT FROM
+(
+SELECT /*+ NO_INDEX(y) */
+                      to_date(to_char(date_key)||'235959','YYYYMMDDHH24MISS') YESTERDAY_DT,
+                      nvl(LAST_RGE_DT, to_date('19000101','YYYYMMDD')) YESTERDAY_LAST_RGE_DT,
+                      LEAST( nvl(FIRST_REFILL_DT,to_date('99991231','YYYYMMDD')),
+                      nvl(FIRST_USAGE_DT,to_date('99991231','YYYYMMDD')),
+                      nvl(FIRST_ACTIVATION_DT,to_date('99991231','YYYYMMDD')) ) YESTERDAY_FIRST_ACT_DT,
+                      y.*,pk.payment_option_cd
+                FROM  BIB_CDR.FCT_SUBS_SNAPD y
+                JOIN  BIB.DIM_PAYMENT_OPTION pk on y.payment_option_key=pk.payment_option_key
+                WHERE date_key =  20170711
+                AND   DW_SUBPART=0 
+                )
+                )
+                )
+                ;
+                
+                
+                
+
+                select dbms_metadata.get_ddl('INDEX','UK_CS6_CCN_RAW_CDR_BI;','STG_CDR') from dual;
+
+
+select * from BIB_CDR.FCT_SUBS_EVENT_SUMD;
+
+ 
+ select * from bib.FCT_SUBSCRIBER_SNAPD
+ where snapshot_date_key = '20170711'
+
+
+
+
+
+
+
+ 
+
+select /*+PARALLEL(4)*/snapshot_date_key,
+MSISDN_NSK,
+activation_dt,
+LAST_RGE_DT,
+case
+   when LAST_RGE_DT = LAST_SMS_DT then    'SMS'
+   when LAST_RGE_DT = LAST_DATA_USAGE_DT then    'DAT'
+   when LAST_RGE_DT = LAST_CALL_DT then    'VOI'
+   when LAST_RGE_DT = LAST_VAS_DT then    'VAS'
+   
+      when LAST_RGE_DT = LAST_REFILL_DT then    'REFILL'   
+      when LAST_RGE_DT = LAST_MMS_SENT_DT then    'MMS'   
+      when LAST_RGE_DT = LAST_MMS_RECEIVED_DT then    'MMS'
+         when LAST_RGE_DT = LAST_FREE_CALL_DT then    'FREE CALL'
+            when LAST_RGE_DT = LAST_VOICEMAIL_CALL_DT then    'VOICE MAIL'
+                  when LAST_RGE_DT = LAST_MISC_DT then    'MISC'
+                     when LAST_RGE_DT = LAST_MM_DT then    'MoMo'
+                                  when LAST_RGE_DT = ADJ_LAST_RGE_DT then    'ADJ'
+   
+   else
+    'Other Event'
+END "Last RGE Event",
+ROUND(TODAY_DT - LAST_RGE_DT)  RGE_AGE
+  from (select MSISDN_NSK,snapshot_date_key,
+               activation_dt,
+               RGE_DT LAST_RGE_DT,
+               ROUND(TODAY_DT - RGE_DT) RGE_AGE,
+               TODAY_DT,
+               LAST_SMS_DT,
+               LAST_DATA_USAGE_DT,
+               LAST_CALL_DT,
+               LAST_VAS_DT,
+               CLOSINGBASE_CNT, 
+               LAST_REFILL_DT,
+               LAST_MMS_SENT_DT,
+               LAST_MMS_RECEIVED_DT,
+               LAST_FREE_CALL_DT,
+               LAST_VOICEMAIL_CALL_DT,
+               ADJ_LAST_RGE_DT,
+               LAST_MISC_DT, 
+               LAST_MM_DT
+          from BIB.FCT_SUBSCRIBER_SNAPD partition
+           for(20170727)
+         where NET_ADDITIONS = 1)
+         ;
+         
+         
+         
+         
+         
+SELECT  /*+ parallel(10)*/   * FROM BIB_CDR.FCT_CDR_PREPAID_RATED PARTITION FOR (20170421)
+--PARTITION FOR ()
+WHERE WALLET_KEY IN (
+SELECT WALLET_KEY FROM DIM_WALLET
+WHERE WALLET_TYPE_CD LIKE 'LOYALTY')
+AND MSISDN_NSK IN  (SELECT MSISDN_NSK FROM MIKE_CHURN)
+;
+
+
+SELECT  /*+ parallel(10)*/    *   FROM BIB_CDR.FCT_CDR_PREPAID_RATED PARTITION FOR (20170421)
+where PROVIDERS_DA_DTL is not null;
+           

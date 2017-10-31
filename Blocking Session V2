@@ -1,0 +1,107 @@
+--------Blocking Session using v$lock
+
+SELECT 
+   l1.sid || ' is blocking ' || l2.sid blocking_sessions
+FROM 
+   v$lock l1, v$lock l2
+WHERE
+   l1.block = 1 AND
+   l2.request > 0 AND
+   l1.id1 = l2.id1 AND
+   l1.id2 = l2.id2
+   ;
+Blocking session with More information
+
+SELECT s1.username || '@' || s1.machine
+    || ' ( SID=' || s1.sid || ' )  is blocking '
+    || s2.username || '@' || s2.machine || ' ( SID=' || s2.sid || ' ) ' AS blocking_status
+    FROM v$lock l1, v$session s1, v$lock l2, v$session s2
+    WHERE s1.sid=l1.sid AND s2.sid=l2.sid
+    AND l1.BLOCK=1 AND l2.request > 0
+    AND l1.id1 = l2.id1
+    AND l2.id2 = l2.id2 ;
+
+    
+Blocking session with Expanded version
+
+SELECT vs.username,
+ vs.osuser,
+ vh.sid locking_sid,
+ vs.status status,
+ vs.module module,
+ vs.program program_holding,
+ jrh.job_name,
+ vsw.username,
+ vsw.osuser,
+ vw.sid waiter_sid,
+ vsw.program program_waiting,
+ jrw.job_name,
+ 'alter system kill session ' || ''''|| vh.sid || ',' || vs.serial# || ''';'  "Kill_Command"
+FROM v$lock vh,
+ v$lock vw,
+ v$session vs,
+ v$session vsw,
+ dba_scheduler_running_jobs jrh,
+ dba_scheduler_running_jobs jrw
+WHERE     (vh.id1, vh.id2) IN (SELECT id1, id2
+ FROM v$lock
+ WHERE request = 0
+ INTERSECT
+ SELECT id1, id2
+ FROM v$lock
+ WHERE lmode = 0)
+ AND vh.id1 = vw.id1
+ AND vh.id2 = vw.id2
+ AND vh.request = 0
+ AND vw.lmode = 0
+ AND vh.sid = vs.sid
+ AND vw.sid = vsw.sid
+ AND vh.sid = jrh.session_id(+)
+ AND vw.sid = jrw.session_id(+)
+ ;
+ 
+ 
+ 
+Details on Blocking sessions in RAC
+
+SELECT DISTINCT S1.USERNAME || '@' || S1.MACHINE
+|| ' ( INST=' || S1.INST_ID || ' SID=' || S1.SID || ' ) IS BLOCKING '
+|| S2.USERNAME || '@' || S2.MACHINE || ' ( INST=' || S1.INST_ID || ' SID=' || S2.SID || ' ) ' AS BLOCKING_STATUS
+FROM GV$LOCK L1, GV$SESSION S1, GV$LOCK L2, GV$SESSION S2
+WHERE S1.SID=L1.SID AND S2.SID=L2.SID
+AND S1.INST_ID=L1.INST_ID AND S2.INST_ID=L2.INST_ID
+AND L1.BLOCK > 0 AND L2.REQUEST > 0
+AND L1.ID1 = L2.ID1 AND L1.ID2 = L2.ID2;
+
+Details On Blocked Objects
+
+
+SELECT DISTINCT S1.USERNAME || '@' || S1.MACHINE
+|| ' ( INST=' || S1.INST_ID || ' SID=' || S1.SID || ' ) IS BLOCKING '
+|| S2.USERNAME || '@' || S2.MACHINE || ' ( INST=' || S1.INST_ID || ' SID=' || S2.SID || ' ) OBJ_ID:' ||L1.ID1||' OBJ_NAME:'||O.OBJECT_NAME
+AS BLOCKING_STATUS
+FROM GV$LOCK L1, GV$SESSION S1, GV$LOCK L2, GV$SESSION S2,DBA_OBJECTS O
+WHERE S1.SID=L1.SID AND S2.SID=L2.SID
+AND S1.INST_ID=L1.INST_ID AND S2.INST_ID=L2.INST_ID
+AND L1.ID1=OBJECT_ID 
+AND L1.ID1=O.OBJECT_ID
+AND L1.BLOCK > 0 AND L2.REQUEST > 0
+AND L1.ID1 = L2.ID1 AND L1.ID2 = L2.ID2
+;
+
+Incase, User is requesting to check whether a particular TABLE is locked by any Session?, then you can use the object_id (SELECT OBJECT_ID FROM DBA_OBJECTS WHERE OWNER=’ABC’ AND OBJECT_NAME=’XYZ’) in below query.
+
+
+
+SELECT DISTINCT S1.USERNAME || '@' || S1.MACHINE
+|| ' ( INST=' || S1.INST_ID || ' SID=' || S1.SID || ' ) IS BLOCKING '
+|| S2.USERNAME || '@' || S2.MACHINE || ' ( INST=' || S1.INST_ID || ' SID=' || S2.SID || ' ) OBJ_ID:' ||L1.ID1||' OBJ_NAME:'||O.OBJECT_NAME AS BLOCKING_STATUS
+FROM GV$LOCK L1, GV$SESSION S1, GV$LOCK L2, GV$SESSION S2,DBA_OBJECTS O
+WHERE S1.SID=L1.SID AND S2.SID=L2.SID
+AND S1.INST_ID=L1.INST_ID AND S2.INST_ID=L2.INST_ID
+AND L1.ID1=OBJECT_ID 
+AND L1.ID1=O.OBJECT_ID
+AND L1.BLOCK > 0 AND L2.REQUEST > 0
+AND L1.ID1 = L2.ID1 AND L1.ID2 = L2.ID2;
+ 
+

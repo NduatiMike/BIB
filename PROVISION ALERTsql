@@ -1,0 +1,22 @@
+DELETE FROM bib_meta.dw_rt_file_date_histograms   
+WHERE DW_FILE_KEY IN 
+(SELECT DW_FILE_KEY FROM bib_meta.dw_rt_files WHERE dw_batch_id IN (5626162));
+DELETE FROM bib_meta.dw_rt_batch_date_histograms 
+WHERE dw_batch_id IN (5626162);
+DELETE FROM bib_meta.dw_rt_files 
+WHERE dw_batch_id IN (5626162);
+DELETE FROM bib_meta.dw_rt_run_errors 
+WHERE dw_run_id IN (5923430);
+DELETE FROM bib_meta.dw_rt_batches 
+WHERE dw_batch_id IN (5626162);
+DELETE FROM bib_meta.dw_rt_runs 
+WHERE dw_batch_id IN (5626162);
+commit;
+/
+
+
+
+ALTER SYSTEM KILL SESSION '1359,1970, @4';
+
+
+113426

@@ -1,0 +1,50 @@
+select 
+m.tablespace_name, substr(file_name,2,(instr(file_name,'/')-2)) disk_group, round(tbs_size_gb) tbs_size_gb, months_out
+--tablespace_name, tbs_size_gb
+--sum(tbs_size_mb)/1024 size_gb,
+--sum(tbs_size_mb)/1024/1024 size_tb
+from(
+select 
+tablespace_name,
+stat months_out,
+retention,
+sum(tbs_size_mb)  tbs_size_mb,
+sum(tbs_size_mb)/1024  tbs_size_gb
+from(
+select d.*,
+diff-retention stat
+from
+(
+select m.*,
+MONTHS_BETWEEN((curr_month),(to_date(month_ts_created,'YYYYMM'))) diff
+from (
+select /*+ parallel(4) */
+tablespace_name,
+case 
+when not regexp_like((substr(substr(substr(tablespace_name, instr(tablespace_name, 'M',-1,1)),3),1,6)),'^[[:digit:]]+$') then
+substr(substr(substr(tablespace_name, instr(tablespace_name, 'M',-1,1)),3),1,4)||'00' else
+substr(substr(substr(tablespace_name, instr(tablespace_name, 'M',-1,1)),3),1,6) end month_ts_created,
+to_Date(to_char(sysdate,'YYYYMM'),'YYYYMM')  curr_month,
+trim(trailing 'M' from trim('_' from substr(substr(tablespace_name, instr(tablespace_name,'M',-1,1)-2),1,3))) retention,
+sum(bytes)/1024/1024 as tbs_size_mb
+from dba_data_files
+--where tablespace_name like 'TS_STG_CDR'
+group by tablespace_name
+) m
+where retention <> 'X'
+and substr(MONTH_TS_CREATED,5,2) <> 00
+) d
+--where diff-retention not like '-%'
+)
+group by
+retention,
+tablespace_name,
+stat
+) m
+join dba_data_files df
+on m.tablespace_name = df.tablespace_name
+where months_out <> 0
+--and tbs_size_gb >= 20
+and substr(file_name,2,(instr(file_name,'/')-2)) not like '%HC'
+--and tablespace_name like 'TS_STG%'
+order by 3 desc;

@@ -1,0 +1,869 @@
+  --------------------CHECK WHERE SPACE IS PER TABLESPACE ------------------------------------------------------------------------------------------------------------------------------------------------------
+  
+  
+  select 
+  
+  NAME, SUBSTR(NAME,  ( INSTR(NAME, '2017')  -3)   ,2)  RETENTION , GBYTES, USED , FREE from 
+  (
+  SELECT         /* +full(DBA_FREE_SPACE) PARALLEL(DBA_FREE_SPACE,50) */               /*+ parallel(22)*/
+  nvl(b.tablespace_name,
+               nvl(a.tablespace_name,'UNKOWN')) name,
+         round(Gbytes_alloc)Gbytes,
+         round(Gbytes_alloc - nvl(Gbytes_free,0)) used,
+         nvl(round(Gbytes_free),0) free,
+         round((Gbytes_alloc - nvl(Gbytes_free,0)) / Gbytes_alloc)*100 pct_used,
+         nvl(round(largest),0) largest
+  from ( select sum(bytes)/1024/1024/1024 Gbytes_free,
+                max(bytes)/1024/1024/1024 largest,
+                tablespace_name
+         from  sys.DBA_FREE_SPACE
+         where 1=1
+--         and tablespace_name like '%201610'
+         group by tablespace_name ) a,
+       ( select sum(bytes)/1024/1024/1024 Gbytes_alloc,
+                tablespace_name
+         from sys.dba_data_files
+          where 1=1
+--          and tablespace_name like '%META'
+         group by tablespace_name )b
+  where a.tablespace_name (+) = b.tablespace_name
+--  and a.tablespace_name like '%7M%'
+--  order by name
+)
+WHERE NAME  IN (
+'TS_BIB_M_7M_201607',
+'TS_BIB_M_7M_201608',
+'TS_BIB_M_7M_201609',
+'TS_BIB_M_7M_201610',
+'TS_BIB_M_7M_201611',
+'TS_BIB_M_7M_201701'
+)
+order by GBYTES desc
+
+  ;
+  
+  
+  
+  
+  
+  -----object space 
+  
+  
+  
+  SELECT  table_name,
+SUM(GB)  SUMGB
+
+FROM
+(
+select
+--count( distinct SUBSTR(PARTITION_NAME,-2)) SUBPART, 
+count(distinct SUBSTR(PARTITION_NAME,3,8)) DATE_KEY,
+SUBSTR (PARTITION_NAME, 3, 6) MONTH_ID,
+ a.owner as schema1, segment_type,segment_name as table_name, 
+        retention_value||' '||retention_period as retention_period,
+        a.TABLESPACE_NAME,
+        round(sum(((a.BYTES)/1024/1024/1024))) GB        
+from dba_segments a left join bib_meta.DW_TABLE_METADATA b 
+on
+segment_name = table_name(+)
+--and segment_name like 'PED%'
+--and b.schema_name `= '%PED%'
+AND B.TABLESPACE_VARIABLE LIKE '%TS_BIB_M_7M_201609%'
+group by 
+   SUBSTR(PARTITION_NAME,-2),
+SUBSTR (PARTITION_NAME, 3, 6) ,
+a.TABLESPACE_NAME,
+a.owner, segment_type,segment_name, retention_value||' '||retention_period
+) a
+GROUP BY   table_name
+;
+
+
+
+SELECT * FROM DW_TABLE_METADATA;
+
+
+SELECT DATE_KEY, TABLE_NAME, TABLESPACE_NAME,  MONTH_ID,  SUMGB,  AVGGB FROM 
+(
+SELECT MONTH_ID || SUBPART DATE_KEY,  TABLE_NAME, TABLESPACE_NAME,  MONTH_ID, 
+SUM(GB) OVER (PARTITION BY MONTH_ID || SUBPART,  TABLE_NAME, TABLESPACE_NAME, MONTH_ID  ORDER BY MONTH_ID DESC ) SUMGB,
+ROUND(AVG(GB) OVER (PARTITION BY MONTH_ID ORDER BY MONTH_ID DESC ),2) AVGGB
+FROM
+(
+select
+--count( distinct SUBSTR(PARTITION_NAME,-2)) SUBPART, 
+  SUBSTR(PARTITION_NAME,-2) SUBPART, 
+count(distinct SUBSTR(PARTITION_NAME,3,8)) DATE_KEY,
+SUBSTR (PARTITION_NAME, 3, 6) MONTH_ID,
+ a.owner as schema1, segment_type,segment_name as table_name, 
+        retention_value||' '||retention_period as retention_period,
+        a.TABLESPACE_NAME,
+        round(sum(((a.BYTES)/1024/1024/1024))) GB        
+from dba_segments a, bib_meta.DW_TABLE_METADATA b 
+where segment_name = table_name(+)
+--and segment_name in ( 'SV_XDR' , 'PCI_HISTORY' , 'SRC_OD1_MSISDN_SNAP_DD' ,'I_POSTPAID_ADDRESS')
+group by 
+   SUBSTR(PARTITION_NAME,-2),
+SUBSTR (PARTITION_NAME, 3, 6) ,
+a.TABLESPACE_NAME,
+a.owner, segment_type,segment_name, retention_value||' '||retention_period
+)
+--ORDER BY MONTH_ID || SUBPART DESC
+)
+WHERE SUMGB > 10
+;
+
+
+
+/* daily space consumption per day by TS*/
+select count( distinct SUBSTR(PARTITION_NAME,-2)) SUBPART, 
+count(distinct SUBSTR(PARTITION_NAME,3,8)) DATE_KEY,
+SUBSTR (PARTITION_NAME, 3, 6) MONTH_ID,
+ a.owner as schema1, segment_type,segment_name as table_name, 
+        retention_value||' '||retention_period as retention_period,
+        a.TABLESPACE_NAME,
+        round(sum(((a.BYTES)/1024/1024/1024))) GB        
+from dba_segments a, DW_TABLE_METADATA b 
+where segment_name = table_name(+)
+--and segment_name = 'FCT_SUBS_FULL_SUMD'
+group by SUBSTR (PARTITION_NAME, 3, 6) ,a.TABLESPACE_NAME,
+a.owner, segment_type,segment_name, retention_value||' '||retention_period ;
+
+---------------------------------------THE OBJECTS IN THIS TABLESPACE-------------------------------------------------------------------------------------------------------------------------
+
+  SELECT
+   owner, 
+   TABLESPACE_NAME,
+   table_name, 
+   TRUNC(sum(bytes)/1024/1024) Gbytes,
+   ROUND( ratio_to_report( sum(bytes) ) over () * 100) Percent
+FROM
+(  SELECT TABLESPACE_NAME, Segment_name table_name, owner, bytes
+ FROM dba_segments
+ WHERE segment_type IN ('TABLE', 'TABLE PARTITION', 'TABLE SUBPARTITION')
+ UNION ALL
+ SELECT S.TABLESPACE_NAME,  i.table_name, i.owner, s.bytes
+ FROM dba_indexes i, dba_segments s
+ WHERE s.segment_name = i.index_name
+ AND   s.owner = i.owner
+ AND   s.segment_type IN ('INDEX', 'INDEX PARTITION', 'INDEX SUBPARTITION')
+ UNION ALL
+ SELECT S.TABLESPACE_NAME, l.table_name, l.owner, s.bytes
+ FROM dba_lobs l, dba_segments s
+ WHERE s.segment_name = l.segment_name
+ AND   s.owner = l.owner
+ AND   s.segment_type IN ('LOBSEGMENT', 'LOB PARTITION')
+ UNION ALL
+ SELECT  S.TABLESPACE_NAME, l.table_name, l.owner, s.bytes
+ FROM dba_lobs l, dba_segments s
+ WHERE s.segment_name = l.index_name
+ AND   s.owner = l.owner
+ AND   s.segment_type = 'LOBINDEX')
+WHERE 1=1
+--AND TABLE_NAME NOT IN (SELECT TABLE_NAME FROM DW_TABLE_METADATA WHERE DW_TABLE_METADATA.TABLESPACE_VARIABLE IS NULL )
+--AND owner in UPPER('BIB_META')
+and TABLESPACE_NAME =  'TS_BIB'
+GROUP BY TABLESPACE_NAME,  table_name, owner
+--HAVING SUM(bytes)/1024/1024 > 10  /* Ignore really small tables */
+--ORDER BY SUM(bytes) desc
+
+;
+  
+
+  
+  SELECT * FROM
+  (
+  SELECT TABLESPACE_NAME, Segment_name table_name, owner, bytes
+ FROM dba_segments
+ WHERE segment_type IN ('TABLE', 'TABLE PARTITION', 'TABLE SUBPARTITION')
+ UNION ALL
+ SELECT S.TABLESPACE_NAME,  i.table_name, i.owner, s.bytes
+ FROM dba_indexes i, dba_segments s
+ WHERE s.segment_name = i.index_name
+ AND   s.owner = i.owner
+ AND   s.segment_type IN ('INDEX', 'INDEX PARTITION', 'INDEX SUBPARTITION')
+ UNION ALL
+ SELECT S.TABLESPACE_NAME, l.table_name, l.owner, s.bytes
+ FROM dba_lobs l, dba_segments s
+ WHERE s.segment_name = l.segment_name
+ AND   s.owner = l.owner
+ AND   s.segment_type IN ('LOBSEGMENT', 'LOB PARTITION')
+ UNION ALL
+ SELECT  S.TABLESPACE_NAME, l.table_name, l.owner, s.bytes
+ FROM dba_lobs l, dba_segments s
+ WHERE s.segment_name = l.index_name
+ AND   s.owner = l.owner
+ AND   s.segment_type = 'LOBINDEX'
+ )WHERE TABLESPACE_NAME = 'TS_BIB_M_13M_201705'
+ ORDER BY BYTES DESC
+ ;
+  
+  
+  
+  
+  SELECT S.TABLESPACE_NAME, l.table_name, l.owner, s.bytes
+ FROM dba_lobs l, dba_segments s
+ WHERE s.segment_name = l.segment_name
+ AND   s.owner = l.owner
+ AND   s.segment_type IN ('LOBSEGMENT', 'LOB PARTITION');
+ 
+  
+  
+-------------------FIND CLAIMABLE SPACE-------------------------------------------------
+
+select     /*+PARALLEL 20 */    t.owner,t.table_name, s.tablespace_name,
+round(s.bytes/1024/1024) actual_MB,
+round((t.num_rows+1) * t.avg_row_len/1024/1024) optimal_MB,
+round(s.bytes/1024/1024) -
+round((t.num_rows+1) * t.avg_row_len/1024/1024) CLAIMABLE_MB
+from dba_tables t, dba_segments s
+where t.owner = s.owner and s.owner='BIB_CDR'
+and  t.table_name = s.segment_name
+and round(s.bytes/1024/1024) - round((t.num_rows+1) * t.avg_row_len/1024/1024) > 200
+order by CLAIMABLE_MB desc;
+/
+
+
+
+
+SELECT   /*+PARALLEL 20 */ SUM(bytes), SUM(bytes)/1024/1024 MB
+    FROM dba_extents
+    WHERE owner = 'BIB_CDR'
+    AND segment_name = 'FCT_VALUE_SEGMENT_SNAPM_PRE2';
+  
+  SELECT
+  /* + RULE */
+  df.tablespace_name "Tablespace",
+  df.bytes / (1024*1024*1024) "Size(GB)",
+  SUM(fs.bytes) / (1024*1024*1024) "Free(GB)",
+  NVL(ROUND(SUM(fs.bytes) * 100 / df.bytes),1) "%Free",
+  ROUND((df.bytes         - SUM(fs.bytes)) * 100 / df.bytes) "%Used"
+FROM dba_free_space fs,
+  (SELECT tablespace_name,
+    SUM(bytes) bytes
+  FROM dba_data_files
+  WHERE tablespace_name  like '%TS%'
+  GROUP BY tablespace_name
+  ) df
+WHERE fs.tablespace_name (+) = df.tablespace_name 
+GROUP BY df.tablespace_name, df.bytes
+order by 3 desc
+;
+
+
+
+
+
+SELECT DATE_KEY, TABLE_NAME, TABLESPACE_NAME,  MONTH_ID,  SUMGB,  AVGGB FROM 
+(
+
+SELECT MONTH_ID || SUBPART DATE_KEY,  TABLE_NAME, TABLESPACE_NAME,  MONTH_ID, 
+SUM(GB) OVER (PARTITION BY MONTH_ID || SUBPART,  TABLE_NAME, TABLESPACE_NAME, MONTH_ID  ORDER BY MONTH_ID DESC ) SUMGB,
+ROUND(AVG(GB) OVER (PARTITION BY MONTH_ID ORDER BY MONTH_ID DESC ),2) AVGGB
+FROM
+(
+select
+--count( distinct SUBSTR(PARTITION_NAME,-2)) SUBPART, 
+  SUBSTR(PARTITION_NAME,-2) SUBPART, 
+count(distinct SUBSTR(PARTITION_NAME,3,8)) DATE_KEY,
+SUBSTR (PARTITION_NAME, 3, 6) MONTH_ID,
+ a.owner as schema1, segment_type,segment_name as table_name, 
+        retention_value||' '||retention_period as retention_period,
+        a.TABLESPACE_NAME,
+        round(sum(((a.BYTES)/1024/1024/1024))) GB        
+from dba_segments a, bib_meta.DW_TABLE_METADATA b 
+where segment_name = table_name(+)
+--and segment_name in ( 'SV_XDR' , 'PCI_HISTORY' , 'SRC_OD1_MSISDN_SNAP_DD' ,'I_POSTPAID_ADDRESS')
+group by 
+   SUBSTR(PARTITION_NAME,-2),
+SUBSTR (PARTITION_NAME, 3, 6) ,
+a.TABLESPACE_NAME,
+a.owner, segment_type,segment_name, retention_value||' '||retention_period
+)
+--ORDER BY MONTH_ID || SUBPART DESC
+)
+WHERE SUMGB > 10
+;
+---------WHAT IS USING THE TABLESPACE ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+--CREATE TABLE INDDROP AS 
+--DROP TABLE INDDROP PURGE;
+
+select * from all_ind_columns
+where 1=1
+--and index_owner = 'BIB_CDR'
+and index_name = 'UKI_CS6_SDP_RAW_CDR_BI';
+
+
+
+ select /*+parallel(2)*/ 
+--SUBSTR(TABLE_NAME, 8, 8 )  ,
+--row_number () over (order by partition_name desc) rownumbr, 
+'ALTER TABLE  STG_CDR.CS6_CCN_RAW_CDR EXCHANGE SUBPARTITION FOR  (' || SUBSTR(TABLE_NAME, 8, 8 ) || ','
+||  SUBSTR(TABLE_NAME, 20 ,1  )  || ')    WITH TABLE STG_CDR.' || TABLE_NAME || '    EXCLUDING INDEXES WITHOUT VALIDATION; ' ,
+A.*
+-- DISTINCT '''' ||SEGMENT_NAME||'''' ||','
+--'DROP TABLE ' ||OWNER|| '.'  ||TABLE_NAME || ' PURGE ;' 
+from dba_TABLES a where 1=1
+AND TABLE_NAME LIKE '%PED_RW%'
+AND  TABLESPACE_NAME  IS NOT NULL
+AND SUBSTR(TABLE_NAME, 8, 8 )    IN 
+(
+20170127,
+20170531,
+20170604,
+20170526,
+20170527,
+20170528,
+20170525,
+20170602,
+20170322,
+20170202,
+20170201
+)
+-- and 
+-- SEGMENT_NAME like '%CTS%' 
+-- OR SEGMENT_NAME like '%PEX%'
+-- OR segment_name like '%CTX%')
+-- AND SEGMENT_TYPE NOT LIKE  '%INDEX%'
+-- and partition_name  like '%2017%'
+;
+/
+
+
+
+ALTER TABLE BIB_CDR.FCT_CDR_PREPAID_RATED EXCHANGE SUBPARTITION for(20170501,1) WITH TABLE BIB_CDR.PED_MA_C_20170501_SP01 EXCLUDING INDEXES WITHOUT VALIDATION;
+
+
+SELECT
+   owner, 
+   table_name, 
+   TRUNC(sum(bytes)/1024/1024) Meg,
+   ROUND( ratio_to_report( sum(bytes) ) over () * 100) Percent
+FROM
+(SELECT segment_name table_name, owner, bytes
+ FROM dba_segments
+ WHERE segment_type IN ('TABLE', 'TABLE PARTITION', 'TABLE SUBPARTITION')
+ UNION ALL
+ SELECT i.table_name, i.owner, s.bytes
+ FROM dba_indexes i, dba_segments s
+ WHERE s.segment_name = i.index_name
+ AND   s.owner = i.owner
+ AND   s.segment_type IN ('INDEX', 'INDEX PARTITION', 'INDEX SUBPARTITION')
+ UNION ALL
+ SELECT l.table_name, l.owner, s.bytes
+ FROM dba_lobs l, dba_segments s
+ WHERE s.segment_name = l.segment_name
+ AND   s.owner = l.owner
+ AND   s.segment_type IN ('LOBSEGMENT', 'LOB PARTITION')
+ UNION ALL
+ SELECT l.table_name, l.owner, s.bytes
+ FROM dba_lobs l, dba_segments s
+ WHERE s.segment_name = l.index_name
+ AND   s.owner = l.owner
+ AND   s.segment_type = 'LOBINDEX')
+WHERE owner in UPPER('BIB_META')
+GROUP BY table_name, owner
+HAVING SUM(bytes)/1024/1024 > 10  /* Ignore really small tables */
+ORDER BY SUM(bytes) desc
+;
+------------------------DROP PARTITIONS--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+--create table BIBCDRDROP1 as 
+
+ SELECT
+-- A.*,
+row_number () over (order by partition_name desc) rownumbr, 
+'ALTER TABLE ' ||TABLE_OWNER|| '.' || TABLE_NAME || ' DROP partition '  ||PARTITION_NAME || ';' statement
+FROM    dba_tab_partitions 
+WHERE 
+1=1
+--AND TABLESPACE_NAME ='TS_I_POSTPAID_Z'
+--AND TABLE_OWNER like '%STG_CDR%'
+AND TABLE_NAME LIKE '%BAD_DATA%'
+--(
+--'I_POSTPAID_ADDRESS',
+--'I_UNBILLED_USAGE'
+--) 
+--And  SUBSTR(partition_name , 3, 6 )  =  '201702'
+--and partition_name like '%201608%'
+ORDER BY PARTITION_NAME ASC
+;
+/
+
+
+------------------------DROP PARTITIONS-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+SELECT
+ 'EXECUTE IMMEDIATE ''alter index '|| index_owner|| '.'|| index_name
+       || ' rebuild subpartition '|| SUBPARTITION_NAME|| ' tablespace '
+       || tablespace_name|| ' parallel 10 '';'
+          REBUILD_IDX 
+  FROM dba_ind_SUBpartitions
+ WHERE status = 'UNUSABLE'
+-- AND index_name = 'UK_CS6_SDP_RAW_CDR_BI'
+ ;
+ /
+ 
+
+
+--SELECT * FROM BIB_SUB_MOVE ORDER BY rownumbr DESC;
+--CREATE TABLE BIB_SUB_MOVE AS 
+
+SELECT 
+--A.*,
+row_number () over (order by partition_name desc) rownumbr, 
+ 'ALTER TABLE ' || table_owner || '.'
+       ||table_name
+       ||' MOVE SUBPARTITION '
+       ||SUBPARTITION_NAME
+       ||' TABLESPACE TS_BIB_CDR_M_3M_201611  parallel 32; ' STATEMENT
+FROM   DBA_subpartitions a
+WHERE 1=1
+AND TABLESPACE_NAME  like  'TS_BIB_CDR_M_3M_201610'
+--and PARTITION_NAME like '%P_20160606_SP04%'
+AND TABLE_OWNER = 'BIB_CDR'
+--and TABLE_NAME LIKE ''
+--and SUBPARTITION_NAME like 'P_20160131%'
+;
+
+
+----------------FIX PARTITION NAMES ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+begin
+  DW_BIB_MAINT_UTL.FIX_PARTITION_NAMES('IA_USER', 'I_BILLING_ACCOUNT');
+dw_bib_utl.RELEASE_SESSION_USER_LOCKS; 
+  
+end;
+/
+
+-- select 'alter table '||table_owner||'.'||table_name ||' add partition '|| partition_name||' to P_'||to_char(to_date(substr(partition_name,3,7)||'1','YYYYMMDD')+1, 'YYYYMMDD')||';'
+------------------RENAME PARTITIONS --------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+ select 'alter table '||table_owner||'.'||table_name ||' add partition P_'||to_char(to_date(substr(partition_name,3,7)||'1','YYYYMMDD')+1, 'YYYYMMDD')|| '    VALUES LESS THAN  '||
+ to_char(to_date(substr(partition_name,3,7)||'1','YYYYMMDD')+2, 'YYYYMMDD')||   ';'
+from
+
+(
+SELECT MAX(partition_name)partition_name,
+TABLE_OWNER,
+TABLE_NAME
+FROM
+all_tab_partitions 
+WHERE TABLE_OWNER = 'STG_GEN'
+AND TABLE_NAME  = 'I_INVENTORY_SNAPM' 
+GROUP BY TABLE_OWNER, TABLE_NAME
+);
+/
+
+ALTER TABLE STG_GEN.I_INVENTORY_SNAPM SET INTERVAL();
+alter table STG_GEN.I_INVENTORY_SNAPM add partition P_20170801    VALUES LESS THAN  (20170802);
+
+
+alter tablespace TS_BIB_CDR_M_3M_201610 resize 1G;
+alter tablespace TS_BIB_M_3M_201606 read only ;
+
+
+------------------------TABLE PARTITIONS ------------------------------------------
+
+
+ SELECT row_number () over (order by partition_name desc) as rownumber,
+ 'ALTER TABLE ' ||TABLE_OWNER|| '.' || TABLE_NAME || ' DROP partition '  ||PARTITION_NAME || ';'  sttmnt
+ FROM    dba_tab_partitions A
+WHERE 
+--1=1a
+TABLESPACE_NAME = 'TS_BIB_CDR_M_3M_201610'
+--AND TABLE_OWNER like '%BIB%'
+--AND SEGMENT_TYPE = 'TABLE PARTITION'
+--AND TABLE_NAME like  '%FCT%'
+--(
+--'FCT_CDR_RECHARGE',
+--'FCT_CDR_TAP_IN_SUMD'
+--) 
+--And  SUBSTR(partition_name , 3) >  '20160631'
+ORDER BY PARTITION_NAME
+;
+
+--'ALTER INDEX ' || INDEX_OWNER || '.' ||INDEX_NAME || ' REBUILD SUBPARTITION ' || SUBPARTITION_NAME || '  tablespace TS_BIB_CDR_M_13M_201703  parallel 16 ;'
+
+--------------------------------------------------------------------------------from ray ---------------------------------------------------------------------------------------------------------------------------------
+
+select  a.*, c.*,
+a.tablespace_name,retention_value, 
+--'alter table '||table_owner||'.'||a.table_name||' move subpartition '||subpartition_name||' tablespace TS_'||TABLE_OWNER||'_M_7M_'||substr(partition_name,3,6)||' parallel 16;'
+'alter index '||index_owner||'.'||a.index_name||' rebuild subpartition '||subpartition_name||' tablespace TS_'||INDEX_OWNER||'_M_'||retention_value||'M_'||substr(subpartition_name,3,6)||' parallel 16 ;'
+--'alter index '||index_owner||'.'||a.index_name||' rebuild online partition '||partition_name||' tablespace TS_'||INDEX_OWNER||'_M_'||retention_value||'M_'||substr(partition_name,3,6)||' parallel 16;'
+--'alter index '||index_owner||'.'||a.index_name||' modify default attributes for partition '||partition_name||' tablespace TS_'||INDEX_OWNER||'_M_'||retention_value||'M_'||substr(partition_name,3,6)||'_REC;'
+--'alter index '||index_owner||'.'||a.index_name||' rebuild subpartition '||subpartition_name||' tablespace TS_BIB_CDR_M_25M_201701 parallel 16;'
+from dba_ind_subpartitions a,bib_ctl.dw_table_metadata b ,dba_indexes c
+where a.index_name = c.index_name
+and c.table_name = b.table_name
+--and a.partition_name like 'P_201%'
+--and b.retention_value = 7
+--and a.index_name like '%IBF_XDRIBS_EDR_UIDX%'
+and a.status = 'UNUSABLE'
+--and substr(partition_name,3,6) not in (   '201703' , '201704')
+--and a.table_owner = 'BIB'
+--and (a.tablespace_name like 'TS_BIB_CDR_M_5M_201612') 
+--group by a.tablespace_name,a.index_owner,a.index_name,subpartition_name,substr(subpartition_name,3,6),retention_value
+--group by a.tablespace_name,a.table_name,b.retention_value
+order by 1 DESC ;
+
+--BIB_CDR.BIX_FCT_CDR_TAP_IN
+
+-----------MONITOR INDEX REBUILDS -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+select index_owner,index_name,count(*)
+from dba_ind_subpartitions where status='UNUSABLE'
+group by index_owner,index_name order by 3 desc;
+
+
+
+
+SELECT SQL_TEXT, SADDR
+FROM V$SQLAREA,V$SESSION
+WHERE V$SQLAREA.ADDRESS = V$SESSION.SQL_ADDRESS
+AND UPPER(SQL_TEXT) LIKE 'ALTER%TABLESPACE%';
+/
+
+
+-----------------------------------------DEFULT TABLESPACE----------------------------------------------------------------------------------------------------------------------------------------------------------
+SELECT *
+--DISTINCT default_tablespace
+ FROM dba_users
+where default_tablespace like 'TS_CDR_STORE_NEW' ORDER BY 1;
+
+SELECT *  FROM dba_users 
+WHERE default_tablespace LIKE 'TS_CDR_STORE%' 
+ORDER BY 1;
+
+-------------------------Change the default tablespace--------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+alter user bib_cdr default tablespace TS_CDR_STORE_STATIC;
+
+
+-------------------------TABLESPACE SIZE--------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+select a.tablespace_name, file_id, b.status, block_size, file_name, round(bytes/1024/1024/1024) bytes_gb, autoextensible, bigfile, round(maxbytes/1024/1024/1024) maxbytes_gb
+from dba_data_files a, dba_tablespaces b 
+where a.tablespace_name = b.tablespace_name 
+and a.tablespace_name 
+    in (
+       'TS_BIB_M_7M_201609'
+       )
+--and  b.status   != 'ONLINE'
+;
+/
+  
+------------------------FIX PARTITION--------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+begin
+  DW_BIB_MAINT_UTL.FIX_PARTITION_NAMES('BIB_CDR', 'FCT_CDR_RECHARGE');
+dw_bib_utl.RELEASE_SESSION_USER_LOCKS; 
+  
+end;
+/
+
+
+--------------------------------------------------------ALL_TAB_PARTITIONS---------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------ALL_TAB_PARTITIONS---------------------------------------------------------------------------------------------------------------
+
+--Move partitions 
+select /*+ parallel(10)*/ 
+a.*,
+-- 'ALTER TABLE ' ||table_owner || '.'
+--       ||table_name
+--       ||'  modify default attributes for partition '
+--       ||partition_name
+--       ||' TABLESPACE TS_BIB_CDR_M_3M_201607 ;  '
+--   ||' TABLESPACE ' || 'TS_'||table_owner||'_M_72M_'||substr(partition_name ,3,6)  ||' ; '
+      
+      
+     
+ 'ALTER TABLE ' ||table_owner || '.'
+       ||table_name
+       ||'  MOVE PARTITION '
+       ||partition_name
+       ||' TABLESPACE TS_STG_GEN_M_3M_201608 PARALLEL 4;  '
+--   ||' TABLESPACE ' || 'TS_'||table_owner||'_M_72M_'||substr(partition_name ,3,6)  ||' ; '
+      
+      
+FROM   all_tab_partitions a
+WHERE   TABLE_NAME in ( 
+'ABLM_GSM_SUBS_PROVISIONING'
+
+)
+and table_owner ='STG_GEN'
+and TABLESPACE_NAME like  'TS_STG_GEN_M_3M_201602'
+--AND partition_name LIKE '%201607%'
+--AND SUBSTR(PARTITION_NAME, 3) >= '20160301'
+
+--and rownum < 501 
+ORDER BY partition_name desc;
+/
+
+--------------------------------------------------------ALL_TAB_SUBPARTITIONS-------------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------ALL_TAB_SUBPARTITIONS------------------------------------------------------------------------------------------------------------------------------------
+
+select /*+ parallel(10)*/  a.*, 
+'alter index '||index_owner||'.'||a.index_name||' rebuild subpartition '||subpartition_name||' tablespace TS_ parallel 16 online;'
+from  all_tab_subpartitions   a
+where 1=1
+--table_name like '%FCT_MSISDN_RATED_SUMD'
+and TABLE_owner like 'BIB_CDR'
+and TABLESPACE_NAME   = 'TS_BIB_CDR_M_3M_201606'
+--AND partition_name LIKE '%201607%'
+order by partition_name DESC; 
+/
+
+
+
+--------------------------------------------------------DBA_IND_PARTITIONS-----------------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------DBA_IND_PARTITIONS-----------------------------------------------------------------------------------------------------------------------------------------
+
+ alter index BIB_CDR.UI_CDR_RECHARGE modify default attributes for partition  SYS_P22639244 tablespace TS_BIB_CDR_M_3M_201607;
+ 
+alter table BIB_CDR.FCT_CDR_RECHARGE drop partition SYS_P22639244;
+
+select /*+ parallel(10)*/ A.*,
+ 'alter index '||index_owner||'.'||index_name||' modify default attributes for partition  '|| PARTITION_NAME ||' tablespace TS_BIB_CDR_M_3M_201611;'
+ 
+from dba_ind_partitions A
+where
+-- tablespace_name  like  'TS_BIB_CDR_M_3M_201610'
+and index_name like '%BIX_FCT_CDR_PREPAID_TRANS_DED '
+--AND PARTITION_NAME  NOT  LIKE '%201608%'
+--and composite  = 'YES'
+ORDER BY PARTITION_NAME;
+/
+
+
+
+
+--------------------------------------------------------DBA_IND_SUBPARTITIONS--------------------------------------------------------
+--------------------------------------------------------DBA_IND_SUBPARTITIONS--------------------------------------------------------
+ALTER INDEX BIB_CDR.UK_FCT_CDR_RECHARGE_IDX  REBUILD SUBPARTITION SYS_SUBP22639233  tablespace TS_BIB_CDR_M_3M_201607 parallel 16 ;
+
+select /*+ parallel(10)*/ 
+a.*,
+ 'ALTER INDEX ' || INDEX_OWNER || '.' ||INDEX_NAME || ' REBUILD SUBPARTITION ' || SUBPARTITION_NAME || '  tablespace (change me !!) parallel 16 ;'
+--  'ALTER INDEX ' || INDEX_OWNER || '.' ||INDEX_NAME || ' modify default attributes   tablespace TS_BIB_CDR_M_3M_201607;'
+-- STATUS , a.* 
+from DBA_IND_SUBPARTITIONS a
+where 
+STATUS  in ('UNUSABLE')
+--  INDEX_OWNER in ('BIB_CDR')
+--and index_name  LIKE '%MSC_CDR%'
+--and PARTITION_NAME    NOT like '%ind_tab_s%'
+--AND TABLESPACE_NAME  LIKE 'TS_BIB_CDR_M_3M_201606'
+ORDER BY PARTITION_NAME desc
+;
+/
+
+
+select /*+ parallel(10)*/ * from dba_part_tables
+where table_name like '%CS5_CCN_GPRS_MA' 
+and owner like 'STG_CDR';
+
+/
+select /*+ parallel(10)*/ * from dba_part_indexes
+where table_name like 'GGSN_CDR' 
+and owner like 'STG_CDR';
+
+
+select /*+ parallel(10)*/ * from dba_subpart_indexes
+where table_name like 'FCT_CDR_PREPAID_RATED' 
+and owner like 'BIB_CDR';
+/
+
+
+
+
+
+--------------------------------------------------------DBA_EXTENTS----------------------------------------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------DBA_EXTENTS----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+select /*+ parallel(10)*/ * from dba_extents
+where tablespace_name = 'TS_BIB_CDR_M_72M_201607'
+--and segment_name like '%FCT_CDR_PREPAID_RATED'
+and owner like 'BIB_CDR'
+--AND SEGMENT_TYPE LIKE 'TABLE%'
+AND PARTITION_NAME NOT LIKE '%P_201607%'; 
+
+
+--------------------------------------------------------DBA_SEGMENTS----------------------------------------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------DBA_SEGMENTS----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+select  /*+ parallel(10*/ 
+*
+ from dba_segments where tablespace_name  in ('TS_I_POSTPAID_Z')
+--and segment_name   not in (
+--'FCH_MSISDN_USAGE_LAST','FCH_PREPAID_FIRST', 'FCH_PREPAID_LAST'
+--)
+
+--and SEGMENT_TYPE NOT like 'INDEX%PARTITION'
+--and length (PARTITION_NAME) < 4
+--and PARTITION_NAME NOT like  '%P_201607%'
+;
+--/
+
+
+ 
+-------GATHER STATS-------------------------------------------------------------------------
+
+
+select partition_name ,
+'exec DBMS_STATS.GATHER_TABLE_STATS (ownname => ''BIB_CDR'' , tabname => ''FCT_CDR_SUBS_EVENT'',partname=>'''||partition_name||''' ,cascade => true, estimate_percent => 5, granularity => ''ALL'', degree => 16);'
+from dba_tab_partitions where table_name = 'FCT_CDR_SUBS_EVENT'
+and substr(partition_name,3,6) = '<YYYYMM>'
+order by 1 asc;
+
+
+
+
+
+
+select
+    sid,
+    sql_text 
+from
+    v$session s,
+    v$sql q 
+where
+    sid in
+    (select
+       sid
+    from
+       v$session
+   where
+       state in ('WAITING')
+   and
+       wait_class != 'Idle'
+   and 
+       event='enq: TX - row lock contention'
+   and 
+      (q.sql_id = s.sql_id or q.sql_id = s.prev_sql_id));
+      
+      
+      
+      
+      
+      
+      select      nvl(S.USERNAME,'Internal') username,
+      nvl(S.TERMINAL,'None') terminal,
+        nvl(S.MACHINE,'None') machine,
+        nvl(S.OSUSER,'None') OSuser,    
+      L.SID||','||S.SERIAL# Kill,
+      U1.NAME||'.'||substr(T1.NAME,1,20) tab,
+      decode(L.LMODE,1,'No Lock',
+            2,'Row Share',
+            3,'Row Exclusive',
+            4,'Share',
+            5,'Share Row Exclusive',
+            6,'Exclusive',null) lmode,
+      decode(L.REQUEST,1,'No Lock',
+            2,'Row Share',
+            3,'Row Exclusive',
+            4,'Share',
+            5,'Share Row Exclusive',
+            6,'Exclusive',null) request
+from      V$LOCK L,  
+      V$SESSION S,
+      SYS.USER$ U1,
+      SYS.OBJ$ T1
+where      L.SID = S.SID  
+and      T1.OBJ# = decode(L.ID2,0,L.ID1,L.ID2)  
+and      U1.USER# = T1.OWNER#
+and      S.TYPE != 'BACKGROUND'
+order by   username, terminal, machine, lmode
+--order by 1,2,6
+/
+
+select * from  SYS.USER$ U1;
+
+
+
+
+select
+    blocking_session,
+    sid,    serial#,
+    wait_class,
+    seconds_in_wait 
+from
+    v$session 
+where
+    blocking_session is not NULL
+order by
+    blocking_session;
+    
+    
+    
+    select nvl(min( SUBSCRIBER_KEY
+           ),0) 
+            from BIB.DIM_SUBSCRIBER
+            where SUBSCRIBER_KEY
+=-1 ;
+
+
+
+
+
+
+
+
+SELECT * FROM (
+SELECT 
+ROW_NUMBER () OVER (ORDER BY SUBPARTITION_NAME DESC  )  COUNTER , SUBSTR(SUBPARTITION_NAME,3, 8) DT,  SUBSTR(SUBPARTITION_NAME,15) SUB, STM
+ FROM 
+ (
+select  a.*, c.*,
+a.tablespace_name,retention_value, 
+--'alter table '||table_owner||'.'||a.table_name||' move subpartition '||subpartition_name||' tablespace TS_'||TABLE_OWNER||'_M_7M_'||substr(partition_name,3,6)||' parallel 16;'
+'alter index '||index_owner||'.'||a.index_name||' rebuild subpartition '||subpartition_name||' tablespace TS_'||INDEX_OWNER||'_M_'||retention_value||'M_'||substr(subpartition_name,3,6)||' parallel 16 ;'  STM
+--'alter index '||index_owner||'.'||a.index_name||' rebuild online partition '||partition_name||' tablespace TS_'||INDEX_OWNER||'_M_'||retention_value||'M_'||substr(partition_name,3,6)||' parallel 16;'
+--'alter index '||index_owner||'.'||a.index_name||' modify default attributes for partition '||partition_name||' tablespace TS_'||INDEX_OWNER||'_M_'||retention_value||'M_'||substr(partition_name,3,6)||'_REC;'
+--'alter index '||index_owner||'.'||a.index_name||' rebuild subpartition '||subpartition_name||' tablespace TS_BIB_CDR_M_25M_201701 parallel 16;'
+from dba_ind_subpartitions a,bib_ctl.dw_table_metadata b ,dba_indexes c
+where a.index_name = c.index_name
+and c.table_name = b.table_name
+--and a.partition_name like 'P_201%'
+--and b.retention_value = 7
+--and a.index_name like '%IBF_XDRIBS_EDR_UIDX%'
+and a.status = 'UNUSABLE'
+) 
+) A JOIN IBF_DUPS_MK ON A.COUNTER = IBF_DUPS_MK.COUNTER
+AND IBF_DUPS_MK.COUNTER < 31 
+;
+
+
+
+SELECT  DATES, SUBPART  FROM IBF_DUPS_MK
+WHERE  SUBSTR(DATES,1, 6) = 201703
+ORDER BY DATES, SUBPART DESC
+;
+
+
+SELECT DATES, SUBPART FROM  IBF_DUPS_MK
+WHERE COUNTER = 1
+--AND COUNTER < 30
+;
+
+
+SELECT DATES, SUBPART FROM  IBF_DUPS_MK
+WHERE COUNTER >= 1 AND COUNTER <=  30;
+
+SELECT * FROM  IBF_DUPS_MK;
+
+20170326
+
+
+
+SELECT  COUNT(*)   FROM  STG_CDR.PED_RW_20170531_XSP02 ;
+SELECT  /* +parallel 30 */COUNT(*)  FROM STG_CDR.IBF_XDR SUBPARTITION FOR (20170314, 8);
+
+
+
